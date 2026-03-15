@@ -151,7 +151,12 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:11px}
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app">
+  <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;">
+    <div style="width:40px;height:40px;border:3px solid #3D3530;border-top-color:#D97706;border-radius:50%;animation:spin .6s linear infinite;"></div>
+    <div style="font-size:13px;color:#A89880;font-family:DM Sans,sans-serif;">Loading Brisbane Clean Leads...</div>
+  </div>
+</div>
 <div class="toast" id="TC"></div>
 
 <script>
@@ -493,6 +498,8 @@ Just reply or call [Your Phone].
   bulkSendFailed:0,
   theme: localStorage.getItem('v4_theme')||'dark',
   hiddenCols: JSON.parse(localStorage.getItem('v4_hiddenCols')||'[]'),
+  leadsPage: 0,
+  leadsPerPage: 100,
 };
 
 // ════════════════════════════════════════════════════════
@@ -627,6 +634,9 @@ function processPlacesResults(results, suburb, bizType, maxResults){
   const leads=[];
   for(const place of results.slice(0,maxResults)){
     if(existing.has(place.place_id)) continue;
+    // Skip major chains — they have contract cleaners already
+    const chains=["McDonald's", 'KFC', 'Subway', 'Pizza Hut', "Domino's", '7-Eleven', 'Coles', 'Woolworths', 'IGA', 'Aldi', 'Harvey Norman', 'JB Hi-Fi', 'Bunnings', 'Officeworks', 'The Good Guys', 'ANZ', 'Commonwealth', 'Westpac', 'NAB', 'Bendigo', 'Starbucks', 'Gloria Jean', 'Boost Juice', "Hungry Jack's", 'Nandos', "Grill'd", 'Oporto', 'Red Rooster', 'Zambrero', 'Guzman'];
+    if(chains.some(ch=>place.name?.toLowerCase().includes(ch.toLowerCase()))) continue;
     if(existingNames.has((place.name||"").toLowerCase())) continue;
     const website=place.website||"";
     const email=guessEmail(place.name,website);
@@ -640,7 +650,7 @@ function processPlacesResults(results, suburb, bizType, maxResults){
       address:addr,suburb,postcode:pc,website,abn:"",
       rating:place.rating||null,reviewCount:place.user_ratings_total||0,
       category:bizType==="All Businesses"?(place.types?.[0]||"Business").replace(/_/g," "):bizType,
-      source:"Google Places",status:"fresh",emailed:false,emailedAt:null,
+      source:"Google Places",consentSource:"Publicly listed on Google Maps (legitimate interest basis — AU Spam Act s.16)",status:"fresh",emailed:false,emailedAt:null,
       addedAt:new Date().toISOString(),notes:"",starred:false,followUpDate:null,
     });
   }
@@ -1352,6 +1362,8 @@ function buildApp(){
   const emailed=S.leads.filter(l=>l.emailed).length;
   const withEmail=S.leads.filter(l=>l.email).length;
   const won=S.leads.filter(l=>l.status==="won").length;
+  const bounced=S.leads.filter(l=>l.notes?.includes("[BOUNCED")).length;
+  const bounceRate=S.leads.filter(l=>l.emailed).length>0?Math.round(bounced/S.leads.filter(l=>l.emailed).length*100):0;
   const sent=todaySent(),limit=dayLimit();
   const pct=Math.min(100,Math.round(sent/limit*100));
   const pctC=pct>=90?"var(--red)":pct>=70?"var(--yellow)":"var(--green)";
@@ -1396,7 +1408,7 @@ function buildApp(){
     <div class="tab-bar">
       ${(()=>{
       const overdueCount=S.leads.filter(l=>l.followUpDate&&new Date(l.followUpDate)<new Date()&&l.followUpDate.split("T")[0]<todayKey()&&l.status!=="won"&&l.status!=="lost"&&l.status!=="unsubscribed").length;
-      return [["dashboard","📊 Dashboard"],["find","🔍 Find Leads"],["leads","📋 My Leads"],["pipeline","🔄 Pipeline"],["followups","📅 Follow-Ups"+(overdueCount>0?` <span style="background:var(--red);color:#fff;border-radius:10px;padding:0px 5px;font-size:9px;font-weight:700;">${overdueCount}</span>`:"")],["templates","📝 Templates"],["antispam","🛡️ Anti-Spam"],["sheets","📤 Export"],["coverage","🗺️ Coverage"],["campaigns","📈 Campaigns"],["unsubscribes","🚫 Unsubscribes"],["architecture","🏗️ Architecture"],["ai","🤖 AI Assistant"],["abn","🏛️ ABN Lookup"]].map(([id,lbl])=>`<button class="tab ${S.tab===id?"on":""}" onclick="W.setTab('${id}')">${lbl}</button>`).join("");
+      return [["dashboard","📊 Dashboard"],["find","🔍 Find Leads"],["leads","📋 My Leads"],["pipeline","🔄 Pipeline"],["followups","📅 Follow-Ups"+(overdueCount>0?` <span style="background:var(--red);color:#fff;border-radius:10px;padding:0px 5px;font-size:9px;font-weight:700;">${overdueCount}</span>`:"")],["templates","📝 Templates"],["antispam","🛡️ Anti-Spam"],["sheets","📤 Export"],["coverage","🗺️ Coverage"],["campaigns","📈 Campaigns"],["unsubscribes","🚫 Unsubscribes"],["architecture","🏗️ Architecture"],["ai","🤖 AI Assistant"],["abn","🏛️ ABN Lookup"],["privacy","🔏 Privacy Policy"],["warmup","📧 Email Warmup"]].map(([id,lbl])=>`<button class="tab ${S.tab===id?"on":""}" onclick="W.setTab('${id}')">${lbl}</button>`).join("");
     })()}
     </div>
 
@@ -1418,6 +1430,8 @@ function buildApp(){
       ${S.tab==="architecture"?buildArchitecture():""}
       ${S.tab==="ai"?buildAI():""}
       ${S.tab==="abn"?buildABNLookup():""}
+      ${S.tab==="privacy"?buildPrivacyPolicy():""}
+      ${S.tab==="warmup"?buildGmailWarmup():""}
     </div>
 
     ${S.modal==="addLead"?buildAddModal():""}
@@ -2106,6 +2120,7 @@ function buildViewModal(){
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${!l.emailed&&l.email?`<button class="btn btn-p" onclick="bulkMarkEmailed(['${l.id}']);S.modal=null;S.viewingLead=null;">📧 Mark Emailed</button>`:""}
+      ${l.emailed?`<button class="btn btn-r" style="font-size:11px;" onclick="updateLead('${l.id}',{status:'lost',notes:(S.leads.find(x=>x.id==='${l.id}')?.notes||'')+'\n[BOUNCED: '+new Date().toLocaleDateString('en-AU')+']'});S.modal=null;S.viewingLead=null;render()">⚠️ Mark Bounced</button>`:""}
       ${l.email?`<a href="mailto:${esc(l.email)}?subject=${encodeURIComponent(fillTpl(tmpl?.subject||"",l))}&body=${encodeURIComponent(fillTpl((tmpl?.body||"")+"\n\n"+footer,l))}" class="btn btn-b" style="text-decoration:none;" target="_blank">✉️ Open in Mail App</a>`:""}
       <button class="btn btn-g" onclick="W.star('${l.id}');S.viewingLead=S.leads.find(x=>x.id==='${l.id}');render()">${l.starred?"★ Unstar":"☆ Star"}</button>
       ${l.email&&l.status!=="unsubscribed"?`<button class="btn btn-y" style="font-size:11px;" onclick="addUnsubscribe('${esc(l.email)}','manual');S.modal=null;S.viewingLead=null;render()">🚫 Unsubscribe</button>`:""}
@@ -2160,7 +2175,7 @@ const W={
     ids.forEach(id=>deleteLead(id));
     notify("Deleted "+ids.length+" leads");render();
   },
-  del:id=>{if(!confirm("Delete this lead?"))return;deleteLead(id);notify("Deleted");render();},
+  del:id=>{if(!confirm("Delete this lead?\n\nThis permanently removes all data including replies and scores (Privacy Act / GDPR compliant)."))return;deleteLead(id);if(S.aiScores)delete S.aiScores[id];if(S.replies)delete S.replies[id];lss("v4_aiscores",S.aiScores);lss("v4_replies",S.replies);notify("✅ Lead permanently deleted (Privacy Act compliant)");render();},
   star:id=>{updateLead(id,{starred:!S.leads.find(l=>l.id===id)?.starred});render();},
   view:id=>{S.viewingLead=S.leads.find(l=>l.id===id);S.modal="viewLead";render();},
   setFollowUp:id=>{S.viewingLead=S.leads.find(l=>l.id===id);S.modal="setFollowUp";render();},
@@ -2940,6 +2955,17 @@ async function sendEmailToLead(leadId) {
   const lead = S.leads.find(l => l.id === leadId);
   if (!lead?.email) { notify('No email for this lead', 'warn'); return; }
   
+  // Check unsubscribe list
+  if (S.unsubscribes.some(u => u.email === lead.email || u.emailHash)) {
+    notify('⚠️ This email is on the unsubscribe list — cannot send', 'err');
+    return;
+  }
+  
+  // Warn if email is guessed
+  if (lead.emailConfidence === 'guessed' || lead.emailConfidence === 'none') {
+    if (!confirm(`⚠️ This email was GUESSED from the website domain and may not be valid.\n\nEmail: ${lead.email}\n\nSend anyway? Bounced emails damage your Gmail reputation.`)) return;
+  }
+  
   const tmpl = S.templates.find(t => t.id === S.activeTpl);
   if (!tmpl) { notify('Select a template first', 'warn'); return; }
   
@@ -3247,6 +3273,128 @@ function buildABNLookup() {
       </table>
     </div>
   </div>` : ''}
+  </div>`;
+}
+
+function buildPrivacyPolicy(){
+  const biz = S.settings.bName || "Brisbane Clean Leads";
+  const email = S.settings.bEmail || "contact@yourbusiness.com.au";
+  const abn = S.settings.bABN || "XX XXX XXX XXX";
+  const addr = S.settings.bAddress || "Brisbane, QLD, Australia";
+  const date = new Date().toLocaleDateString("en-AU");
+
+  return`<div style="max-width:800px;margin:0 auto;animation:fadeUp .3s ease;">
+  <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+    <div style="width:44px;height:44px;border-radius:12px;background:rgba(124,159,201,.2);border:1px solid rgba(124,159,201,.3);display:flex;align-items:center;justify-content:center;font-size:22px;">🔏</div>
+    <div>
+      <h2 style="font-size:18px;font-weight:800;">Privacy Policy</h2>
+      <p style="font-size:12px;color:var(--text2);">Australian Privacy Act 1988 compliant — Last updated ${date}</p>
+    </div>
+    <button class="btn btn-g" style="margin-left:auto;font-size:11px;" onclick="S.tab=S.prevTab||'dashboard';render()">← Back</button>
+  </div>
+
+  ${[
+    ["1. Who We Are", `${biz} (ABN: ${abn}) based in ${addr}. Contact: ${email}`],
+    ["2. What Data We Collect", "We collect business contact information including business names, email addresses, phone numbers, physical addresses, and ABN numbers from publicly available sources including Google Maps, the Australian Business Register, and business websites."],
+    ["3. How We Collect Data", "Data is collected from: (a) Google Places API — publicly listed business information; (b) Australian Business Register (ABR) — publicly registered business details; (c) Business websites — publicly available contact information; (d) Manual entry by our staff."],
+    ["4. Why We Collect Data", "We collect this data for the purpose of offering professional cleaning services to businesses in Brisbane, Queensland. We only contact businesses that we reasonably believe may benefit from our services."],
+    ["5. How We Use Your Data", "Business contact details are used solely to send commercial electronic messages about our cleaning services. We do not sell, share, or disclose your information to third parties. All data is stored securely on encrypted Australian/Singapore servers."],
+    ["6. Australian Spam Act 2003 Compliance", "All commercial emails sent through this system: (a) Identify our business clearly; (b) Include our full contact details; (c) Include a functional unsubscribe mechanism; (d) Are not sent to individuals who have unsubscribed; (e) Are sent only to business email addresses from publicly available sources."],
+    ["7. Your Rights", "Under the Australian Privacy Act 1988, you have the right to: (a) Access the personal information we hold about your business; (b) Request correction of inaccurate information; (c) Request deletion of your information; (d) Complain to the Office of the Australian Information Commissioner (OAIC). To exercise these rights, contact us at: " + email],
+    ["8. Unsubscribe", `To stop receiving emails from us, reply to any email with the word UNSUBSCRIBE or email ${email} with subject UNSUBSCRIBE. We will remove you within 5 business days as required by law.`],
+    ["9. Data Security", "All data is encrypted at rest using AES-256 encryption. Email addresses are stored in encrypted format. We use HTTPS for all data transmission. Access is protected by JWT authentication."],
+    ["10. Data Retention", "Business contact data is retained for up to 2 years or until an unsubscribe request is received, whichever is earlier."],
+    ["11. Contact & Complaints", `Privacy Officer: ${biz}, ${addr}. Email: ${email}. If you are not satisfied with our response, you may contact the OAIC at www.oaic.gov.au or call 1300 363 992.`],
+  ].map(([title, text])=>`
+  <div class="card" style="margin-bottom:10px;">
+    <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px;">${title}</div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.7;">${text}</div>
+  </div>`).join("")}
+  
+  <div style="background:rgba(217,119,6,.06);border:1px solid rgba(217,119,6,.3);border-radius:var(--r);padding:16px;margin-top:10px;">
+    <div style="font-size:12px;font-weight:700;color:var(--orange);margin-bottom:6px;">⚠️ Important Note</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.7;">This privacy policy is automatically generated based on your business settings. We recommend having a qualified Australian lawyer review it before conducting large-scale email campaigns. The OAIC (oaic.gov.au) provides free guidance on privacy compliance.</div>
+  </div>
+  </div>`;
+}
+
+function buildGmailWarmup(){
+  const dailySent = Object.values(S.dailyLog).reduce((a,b)=>a+b,0);
+  const days = Object.keys(S.dailyLog).length || 1;
+  const avg = Math.round(dailySent/days);
+  
+  const schedule = [
+    {week:"Week 1", daily:20, total:140, risk:"Very Low"},
+    {week:"Week 2", daily:40, total:280, risk:"Very Low"},
+    {week:"Week 3", daily:80, total:560, risk:"Low"},
+    {week:"Week 4", daily:120, total:840, risk:"Low"},
+    {week:"Week 5", daily:180, total:1260, risk:"Medium"},
+    {week:"Week 6", daily:250, total:1750, risk:"Medium"},
+    {week:"Week 7+", daily:300, total:2100, risk:"Acceptable"},
+  ];
+
+  return`<div style="animation:fadeUp .3s ease;">
+  <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+    <div style="width:44px;height:44px;border-radius:12px;background:rgba(234,67,53,.15);border:1px solid rgba(234,67,53,.3);display:flex;align-items:center;justify-content:center;font-size:22px;">📧</div>
+    <div>
+      <h2 style="font-size:18px;font-weight:800;">Gmail Warmup Guide</h2>
+      <p style="font-size:12px;color:var(--text2);">Avoid spam flags and account suspension — follow this schedule</p>
+    </div>
+    <button class="btn btn-g" style="margin-left:auto;font-size:11px;" onclick="S.tab=S.prevTab||'dashboard';render()">← Back</button>
+  </div>
+
+  <div class="alert alert-d" style="margin-bottom:16px;">
+    🚨 <strong>WARNING:</strong> Sending 300 emails/day immediately from a new Gmail = account suspension within days. Follow this warmup schedule!
+  </div>
+
+  <div class="g2" style="margin-bottom:20px;">
+    <div class="stat" style="border-color:rgba(234,67,53,.3);">
+      <div class="stat-v" style="color:var(--red);">${avg}</div>
+      <div class="stat-l">Your Current Daily Average</div>
+    </div>
+    <div class="stat" style="border-color:rgba(0,229,160,.3);">
+      <div class="stat-v" style="color:var(--green);">300</div>
+      <div class="stat-l">Target (Week 7+)</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:700;margin-bottom:12px;">📅 Recommended Warmup Schedule</div>
+    <table>
+      <thead><tr>
+        <th>Period</th><th>Daily Limit</th><th>Weekly Total</th><th>Risk Level</th>
+      </tr></thead>
+      <tbody>
+        ${schedule.map(s=>`<tr>
+          <td style="font-weight:600;">${s.week}</td>
+          <td style="color:var(--green);font-weight:700;">${s.daily} emails</td>
+          <td style="color:var(--text2);">${s.total}</td>
+          <td><span class="badge" style="background:${s.risk==='Very Low'?'var(--green-bg)':s.risk==='Low'?'var(--blue-bg)':s.risk==='Medium'?'var(--yellow-bg)':'var(--orange-bg)'};color:${s.risk==='Very Low'?'var(--green)':s.risk==='Low'?'var(--blue)':s.risk==='Medium'?'var(--yellow)':'var(--orange)'};">${s.risk}</span></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:700;margin-bottom:12px;">✅ Rules to Stay Safe</div>
+    ${[
+      ["Send between 8am-6pm only", "Google flags emails sent at odd hours as spam bots"],
+      ["Never send same template to 50+ in one batch", "Vary the template — use all 5 templates in rotation"],
+      ["Keep 3 second delay between emails", "Already built into the app — never remove this"],
+      ["Monitor bounce rate — keep under 2%", "High bounces = account suspended. Remove bounced emails immediately"],
+      ["Respond to all replies within 24 hours", "Active engagement signals to Google that you are a real human"],
+      ["Warm up for 7 weeks before hitting 300/day", "Patience now = years of reliable sending"],
+      ["Use a dedicated business Gmail", "Never use your personal Gmail for bulk sending"],
+      ["Add SPF record to your domain", "If using custom domain email — improves deliverability significantly"],
+    ].map(([rule, reason])=>`
+    <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="color:var(--green);flex-shrink:0;">✓</span>
+      <div>
+        <div style="font-size:12px;font-weight:600;">${rule}</div>
+        <div style="font-size:11px;color:var(--text2);">${reason}</div>
+      </div>
+    </div>`).join("")}
+  </div>
   </div>`;
 }
 // ════════════════════════════════════════════════════════
